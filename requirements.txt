@@ -1,0 +1,10 @@
+openai==2.15.0
+psutil==7.1.3
+psutil==7.2.1
+vllm==0.13.0
+pytest==9.0.2
+tiktoken==0.12.0
+requests==2.32.5
+nvidia-ml-py==13.590.44
+fastapi==0.128.0
+uvicorn==0.40

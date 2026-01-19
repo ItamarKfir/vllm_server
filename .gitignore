@@ -1,0 +1,26 @@
+# Model files (too large for git)
+Qwen2.5-32B-Instruct-AWQ/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Settings and config (if sensitive)
+# settings.json
+# llm_config.json

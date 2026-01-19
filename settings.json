@@ -1,0 +1,6 @@
+{
+    "terminal.integrated.shellArgs.linux": [
+        "-c",
+        "cd ~/Desktop/LLM && source qwen-server/bin/activate && python server.py; exec bash"
+    ]
+}
