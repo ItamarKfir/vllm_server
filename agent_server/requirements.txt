@@ -1,0 +1,20 @@
+# LlamaIndex dependencies
+llama-index==0.10.0
+llama-index-llms-openai==0.1.0
+llama-index-core==0.10.0
+
+# FastAPI and server
+fastapi==0.128.0
+uvicorn==0.40.0
+pydantic==2.0.0
+
+# OpenAI client (for connecting to vLLM server)
+openai==2.15.0
+
+# Testing
+pytest==9.0.2
+pytest-asyncio==0.23.0
+httpx==0.27.0
+
+# Utilities
+requests==2.32.5

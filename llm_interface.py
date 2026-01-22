@@ -1,105 +1,72 @@
-import subprocess
-import sys
 import os
-import psutil
-import signal
-import atexit
+import uuid
+from typing import AsyncGenerator
 
-def kill_vllm_processes():
-    """Kill all vLLM-related processes"""
-    try:
-        current_pid = os.getpid()
-        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-            try:
-                cmdline = proc.info.get('cmdline', [])
-                if cmdline and any('vllm' in str(arg).lower() or 'EngineCore' in str(arg) for arg in cmdline):
-                    pid = proc.info['pid']
-                    if pid != current_pid:
-                        print(f"🛑 Killing vLLM process: PID {pid}")
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=5)
-                        except psutil.TimeoutExpired:
-                            proc.kill()
-            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-                pass
-    except Exception as e:
-        print(f"⚠️  Error killing processes: {e}")
+from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
+from config_manager import setting
 
-# Global reference to the subprocess
-server_process = None
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTHONHASHSEED"] = "0"
 
-def cleanup():
-    """Cleanup function to kill all child processes"""
-    global server_process
-    if server_process:
-        print("\n🛑 Shutting down vLLM server and child processes...")
-        try:
-            server_process.terminate()
-            try:
-                server_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                server_process.kill()
-        except:
-            pass
+
+class LLMInterface:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self.init_engine()
     
-    kill_vllm_processes()
-    print("✅ Cleanup complete")
+    @classmethod
+    def reset(cls):
+        """Reset the singleton instance to allow re-initialization with new config."""
+        if cls._instance is not None:
+            cls._instance._initialized = False
+            cls._instance = None
+    
+    def init_engine(self):
+        print("🚀 Initializing Async vLLM engine...")
 
-def signal_handler(signum, frame):
-    """Handle termination signals"""
-    print(f"\n⚠️  Received signal {signum}, cleaning up...")
-    cleanup()
-    sys.exit(0)
+        engine_args = AsyncEngineArgs(
+            model=setting.llm.llm_models[0],
+            max_num_seqs=setting.llm.max_num_seqs,
+            max_num_batched_tokens=setting.llm.max_num_batched_tokens,
+            gpu_memory_utilization=setting.llm.gpu_util,
+            kv_cache_memory_bytes=int(
+                setting.llm.gpu_kv_cache_gb * (1024 ** 3)
+            ),
+            max_model_len=setting.llm.max_model_len,
+        )
 
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-atexit.register(cleanup)
+        self.engine = AsyncLLMEngine.from_engine_args(engine_args)
 
-print("=" * 60)
-print("Starting vLLM server...")
-print("💡 Use 'nvidia-smi' to monitor GPU usage")
-print("💡 Press Ctrl+C to stop the server and clean up all processes")
-print("=" * 60)
+        self.sampling_params = SamplingParams(
+            temperature=setting.llm.llm_temperature,
+            max_tokens=setting.llm.max_output_tokens,
+        )
 
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-os.environ['PYTHONHASHSEED'] = '0'
+        print("✅ Async vLLM engine ready!")
+        self._initialized = True
 
-# Configuration
-GPU_UTIL = 0.90
-GPU_KV_CACHE_GB = 3.0
-GPU_KV_CACHE_BYTES = int(GPU_KV_CACHE_GB * 1024**3)
-MAX_MODEL_LEN = 12000
-MAX_NUM_SEQS = 8
-MAX_NUM_BATCHED_TOKENS = 2048
 
-print("\nSERVER CONFIGURATION:")
-print(f"  GPU Memory Utilization: {GPU_UTIL} ({GPU_UTIL*100:.0f}%)")
-print(f"  GPU KV Cache: {GPU_KV_CACHE_GB} GiB")
-print(f"  Max Model Length: {MAX_MODEL_LEN} tokens")
-print(f"  Max Num Seqs: {MAX_NUM_SEQS}")
-print(f"  Max Batched Tokens: {MAX_NUM_BATCHED_TOKENS}")
-print("=" * 60)
-print("Starting vLLM server...\n")
+    async def stream(self, prompt: str) -> AsyncGenerator[str, None]:
+        request_id = str(uuid.uuid4())
+        previous_text = ""
 
-if __name__ == "__main__":
-    try:
-        server_process = subprocess.Popen([
-            sys.executable, "-m", "vllm.entrypoints.openai.api_server",
-            "--model", "Qwen2.5-32B-Instruct-AWQ",
-            "--port", "8000",
-            "--quantization", "awq_marlin",
-            "--kv-cache-memory-bytes", str(GPU_KV_CACHE_BYTES),
-            "--max-model-len", str(MAX_MODEL_LEN),
-            "--max-num-seqs", str(MAX_NUM_SEQS),
-            "--max-num-batched-tokens", str(MAX_NUM_BATCHED_TOKENS),
-        ])
-        
-        server_process.wait()
-        
-    except KeyboardInterrupt:
-        print("\n⚠️  Keyboard interrupt received")
-        cleanup()
-    except Exception as e:
-        print(f"\n❌ Error: {e}")
-        cleanup()
+        async for output in self.engine.generate(
+            prompt,
+            self.sampling_params,
+            request_id,
+        ):
+            text = output.outputs[0].text
+            delta = text[len(previous_text):]
+            previous_text = text
+
+            if delta:
+                yield delta

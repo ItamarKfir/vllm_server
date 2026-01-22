@@ -64,7 +64,6 @@ def chat_with_model():
         
         # Stream the response
         print("\n🤖 Assistant: ", end="", flush=True)
-        start_time = time.time()
         try:
             stream = client.chat.completions.create(
                 model="Qwen2.5-32B-Instruct-AWQ",
@@ -73,7 +72,8 @@ def chat_with_model():
                 max_tokens=2000,
                 stream=True
             )
-            
+            start_time = time.time()
+
             # Collect the full response for history
             full_response = ""
             token_count = 0
