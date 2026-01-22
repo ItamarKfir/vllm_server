@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
     print("🚀 Starting LlamaIndex Agent Server...")
     
     # Get LLM server URL from environment or use default
-    llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
+    llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8000")
     llm_model = os.getenv("LLM_MODEL", "Qwen2.5-32B-Instruct-AWQ")
     
     print(f"📡 Connecting to LLM server: {llm_base_url}")
@@ -92,7 +92,7 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=503, detail="Agent not initialized")
     
     try:
-        response = chat_with_agent(agent_instance, request.message)
+        response = await chat_with_agent(agent_instance, request.message)
         return ChatResponse(
             response=response,
             conversation_id=request.conversation_id,
