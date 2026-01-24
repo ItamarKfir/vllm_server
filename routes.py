@@ -10,7 +10,7 @@ class PromptRequest(BaseModel):
     prompt: str
 
 @router.post("/generate/nonstream")
-def generate_stream(req: PromptRequest):
+def generate_nonstream(req: PromptRequest):
     engine = LLMInterface()
     
     def token_stream() -> Generator[str, None, None]:
@@ -45,7 +45,7 @@ def get_config():
 def save_config(config: dict):
     from config_manager import setting, LLMConfig
     llm_config = LLMConfig(**config)
-    setting._save(llm_config)
+    setting._save_llm(llm_config)
     LLMInterface.reset()
     LLMInterface()
     return {"status": "config saved"}

@@ -136,10 +136,17 @@ class CustomOpenAILLM(LLM):
         )
     
     async def achat(self, messages: Sequence[ChatMessage], **kwargs) -> CompletionResponse:
+        """Async non-streaming chat - this might be called instead of astream_chat()"""
+        print(f"[CustomOpenAILLM] achat() CALLED! (This is NON-streaming - might be wrong!)", flush=True)
+        print(f"[CustomOpenAILLM] Number of messages: {len(messages)}", flush=True)
+        
         # Convert messages to prompt
         prompt = self._messages_to_prompt(messages)
         
         # Call custom API endpoint asynchronously
+        # Note: Even though it's called "nonstream", it still returns a streaming response
+        # We use stream() to read all chunks and accumulate them
+        print(f"[CustomOpenAILLM] Calling /generate/nonstream (accumulating all chunks)", flush=True)
         async with httpx.AsyncClient(timeout=60.0) as client:
             async with client.stream(
                 "POST",
@@ -148,9 +155,12 @@ class CustomOpenAILLM(LLM):
             ) as response:
                 response.raise_for_status()
                 content = ""
+                chunk_count = 0
                 async for chunk in response.aiter_text():
                     if chunk:
+                        chunk_count += 1
                         content += chunk
+                print(f"[CustomOpenAILLM] Accumulated {chunk_count} chunks, total length: {len(content)}", flush=True)
         
         return CompletionResponse(
             text=content,
@@ -160,12 +170,17 @@ class CustomOpenAILLM(LLM):
     async def astream_chat(
         self, messages: Sequence[ChatMessage], **kwargs
     ) -> ChatResponseAsyncGen:
+        """Async streaming chat - this should be called when streaming=True"""
+        print(f"[CustomOpenAILLM] astream_chat() CALLED! (This is the streaming method)", flush=True)
+        print(f"[CustomOpenAILLM] Number of messages: {len(messages)}", flush=True)
+        
         # Convert messages to prompt
         prompt = self._messages_to_prompt(messages)
         
         # Create an async generator function and return it
         # This matches the pattern used by OpenAI LLM
         async def gen() -> ChatResponseAsyncGen:
+            print(f"[CustomOpenAILLM] Starting async stream to /generate/stream", flush=True)
             async with httpx.AsyncClient(timeout=60.0) as client:
                 async with client.stream(
                     "POST",
@@ -174,8 +189,10 @@ class CustomOpenAILLM(LLM):
                 ) as response:
                     response.raise_for_status()
                     content = ""
+                    chunk_count = 0
                     async for chunk in response.aiter_text():
                         if chunk:
+                            chunk_count += 1
                             delta = chunk
                             content += delta
                             # Yield ChatResponse objects
@@ -184,6 +201,7 @@ class CustomOpenAILLM(LLM):
                                 delta=delta,
                                 raw=chunk,
                             )
+                    print(f"[CustomOpenAILLM] Finished streaming {chunk_count} chunks", flush=True)
         
         # Return the async generator (not yield from it)
         return gen()
@@ -303,64 +321,90 @@ def create_agent(base_url: str = "http://localhost:8000", model: str = "Qwen2.5-
         function_tools.append(function_tool)
     
     # Create ReAct agent (using constructor for LlamaIndex 0.14.x)
+    # Enable streaming for real-time responses
+    # Note: verbose=False to reduce reasoning output, but we'll still get the full response
     agent = ReActAgent(
         tools=function_tools,
         llm=llm,
-        verbose=True,
-        system_prompt="You are a helpful AI assistant with access to tools. Use the tools when needed to help answer questions accurately.",
+        verbose=False,  # Set to False to reduce console output, but result still contains reasoning
+        streaming=True,  # Enable streaming
+        system_prompt="You are a helpful AI assistant with access to tools. Use the tools when needed to help answer questions accurately. When you provide your final answer, make it clear and concise.",
     )
     
     return agent
 
 
+async def chat_with_agent_stream(agent: ReActAgent, message: str):
+    """Send a message to the agent and stream only the final answer in REAL-TIME"""
+    try:
+        _tool_usage_tracker["tools_used"] = []
+        workflow_handler = agent.run(user_msg=message)
+        answer_started = False
+        accumulated = ""
+        
+        if hasattr(workflow_handler, 'stream_events'):
+            async for event in workflow_handler.stream_events():
+                delta = getattr(event, 'delta', None) or ""
+                
+                if delta:
+                    accumulated += delta
+                    
+                    if "Answer:" in accumulated and not answer_started:
+                        answer_started = True
+                        pos = accumulated.find("Answer:") + len("Answer:")
+                        initial = accumulated[pos:].strip()
+                        if initial and not any(initial.strip().startswith(m) for m in ["Thought:", "Action:", "Action Input:", "Observation:"]):
+                            yield initial
+                            accumulated = ""  # Reset for new deltas
+                    elif answer_started:
+                        if not any(delta.strip().startswith(m) for m in ["Thought:", "Action:", "Action Input:", "Observation:"]):
+                            yield delta
+        
+        # Wait for completion
+        if hasattr(workflow_handler, 'done'):
+            while not workflow_handler.done():
+                await asyncio.sleep(0.1)
+        elif hasattr(workflow_handler, '__await__'):
+            await workflow_handler
+        
+        # Append tool usage
+        tools_used = _tool_usage_tracker["tools_used"]
+        if tools_used:
+            yield f"\n\n[Used tools: {', '.join(tools_used)}]"
+        
+    except Exception as e:
+        import traceback
+        yield f"Error: {str(e)}\n{traceback.format_exc()}"
+
+
 async def chat_with_agent(agent: ReActAgent, message: str) -> str:
     """Send a message to the agent and get response"""
     try:
-        # Reset tool usage tracker for this conversation
         _tool_usage_tracker["tools_used"] = []
-        
-        # Track tools used during execution
         tools_used = []
-        
-        # In LlamaIndex 0.14.x, ReActAgent is a workflow agent
-        # The run() method returns a workflow handler (WorkflowHandler)
         workflow_handler = agent.run(user_msg=message)
-        
-        # The WorkflowHandler is a Future-like object
-        # Wait for it to complete, then get the result
-        # Try multiple approaches to execute and get result
-        
-        # Approach 1: Check if handler has done() method and wait for it
+
         if hasattr(workflow_handler, 'done'):
-            # Wait for the workflow to complete
             while not workflow_handler.done():
                 await asyncio.sleep(0.1)
             result = workflow_handler.result()
-        # Approach 2: Try to await it directly
         elif hasattr(workflow_handler, '__await__'):
             await workflow_handler
             result = workflow_handler.result() if hasattr(workflow_handler, 'result') else None
-        # Approach 3: Use asyncio.gather to execute it
         else:
             try:
-                # Try to gather/execute the handler
                 await asyncio.gather(workflow_handler)
                 result = workflow_handler.result() if hasattr(workflow_handler, 'result') else None
             except (TypeError, ValueError):
-                # If that fails, try creating a task
                 try:
                     task = asyncio.create_task(workflow_handler)
                     await task
                     result = workflow_handler.result() if hasattr(workflow_handler, 'result') else None
                 except:
-                    # Last resort: try to get result directly (might fail)
                     result = workflow_handler.result() if hasattr(workflow_handler, 'result') else workflow_handler
         
-        # Extract the response from the result
-        # The result structure may vary, try different access patterns
         output = None
         
-        # Debug: Check what type of object we got
         result_type = type(result).__name__
         
         # Check for tool calls in the result
@@ -412,8 +456,32 @@ async def chat_with_agent(agent: ReActAgent, message: str) -> str:
         else:
             text = str(output)
         
-        # Build the final response
-        response_text = str(text) if text else f"Error: Empty response. Output type: {type(output).__name__}, Output: {output}"
+        # Extract only the final answer (everything after "Answer:")
+        answer_marker = "Answer:"
+        if answer_marker in text:
+            answer_start = text.find(answer_marker) + len(answer_marker)
+            final_answer = text[answer_start:].strip()
+            
+            # Remove any remaining reasoning steps that might appear after Answer:
+            lines = final_answer.split('\n')
+            clean_lines = []
+            for line in lines:
+                line_stripped = line.strip()
+                # Stop at first reasoning step after answer
+                if (line_stripped.startswith("Thought:") or 
+                    line_stripped.startswith("Action:") or 
+                    line_stripped.startswith("Action Input:") or
+                    line_stripped.startswith("Observation:")):
+                    break
+                clean_lines.append(line)
+            
+            response_text = '\n'.join(clean_lines).strip()
+        else:
+            response_text = str(text) if text else f"Error: Empty response. Output type: {type(output).__name__}, Output: {output}"
+        
+        # Remove tool usage info if embedded (we'll add it separately)
+        if "[Used tools:" in response_text:
+            response_text = response_text.split("[Used tools:")[0].strip()
         
         # Get tools used from tracker (set by tool wrapper functions)
         tools_used_from_tracker = _tool_usage_tracker["tools_used"]

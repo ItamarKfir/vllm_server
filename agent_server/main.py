@@ -3,12 +3,14 @@ FastAPI server for LlamaIndex Agent
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from contextlib import asynccontextmanager
 import os
+import json
 
-from agent import create_agent, chat_with_agent
+from agent import create_agent, chat_with_agent, chat_with_agent_stream
 
 # Global agent instance
 agent_instance = None
@@ -85,20 +87,44 @@ async def health_check():
     )
 
 
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """Chat with the agent"""
+@app.post("/chat")
+async def chat(request: ChatRequest, stream: bool = False):
+    """Chat with the agent (supports streaming)"""
     if agent_instance is None:
         raise HTTPException(status_code=503, detail="Agent not initialized")
     
-    try:
-        response = await chat_with_agent(agent_instance, request.message)
-        return ChatResponse(
-            response=response,
-            conversation_id=request.conversation_id,
+    # Check if streaming is requested (via query parameter or header)
+    if stream:
+        async def generate():
+            try:
+                async for chunk in chat_with_agent_stream(agent_instance, request.message):
+                    # Format as Server-Sent Events (SSE)
+                    data = json.dumps({"content": chunk, "conversation_id": request.conversation_id})
+                    yield f"data: {data}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                error_data = json.dumps({"error": str(e), "conversation_id": request.conversation_id})
+                yield f"data: {error_data}\n\n"
+        
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+    else:
+        # Non-streaming response
+        try:
+            response = await chat_with_agent(agent_instance, request.message)
+            return ChatResponse(
+                response=response,
+                conversation_id=request.conversation_id,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
 
 
 @app.get("/")
@@ -108,7 +134,7 @@ async def root():
         "message": "LlamaIndex Agent API",
         "endpoints": {
             "health": "/health",
-            "chat": "/chat",
+            "chat": "/chat (use ?stream=true for streaming)",
             "docs": "/docs",
         }
     }

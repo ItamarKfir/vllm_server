@@ -4,6 +4,7 @@ Interactive chat client for the Agent Server
 """
 import requests
 import sys
+import json
 
 AGENT_SERVER_URL = "http://localhost:8001"
 
@@ -21,19 +22,51 @@ def check_server():
         return False
 
 
-def chat(message: str):
-    """Send a message to the agent"""
+def chat(message: str, stream: bool = True):
+    """Send a message to the agent (with streaming support)"""
     try:
-        response = requests.post(
-            f"{AGENT_SERVER_URL}/chat",
-            json={"message": message},
-            timeout=120  # Longer timeout for agent processing
-        )
-        
-        if response.status_code == 200:
-            return response.json()["response"]
+        if stream:
+            # Use streaming endpoint
+            response = requests.post(
+                f"{AGENT_SERVER_URL}/chat?stream=true",
+                json={"message": message},
+                stream=True,
+                timeout=120
+            )
+            
+            if response.status_code == 200:
+                # Stream the response
+                full_response = ""
+                for line in response.iter_lines():
+                    if line:
+                        line_str = line.decode('utf-8')
+                        if line_str.startswith('data: '):
+                            data_str = line_str[6:]  # Remove 'data: ' prefix
+                            if data_str == '[DONE]':
+                                break
+                            try:
+                                data = json.loads(data_str)
+                                chunk = data.get('content', '')
+                                if chunk:
+                                    full_response += chunk
+                                    print(chunk, end='', flush=True)
+                            except json.JSONDecodeError:
+                                pass
+                return full_response
+            else:
+                return f"Error: {response.status_code} - {response.text}"
         else:
-            return f"Error: {response.status_code} - {response.text}"
+            # Non-streaming endpoint
+            response = requests.post(
+                f"{AGENT_SERVER_URL}/chat",
+                json={"message": message},
+                timeout=120
+            )
+            
+            if response.status_code == 200:
+                return response.json()["response"]
+            else:
+                return f"Error: {response.status_code} - {response.text}"
     except requests.exceptions.ConnectionError:
         return "Error: Cannot connect to agent server. Is it running?"
     except Exception as e:
@@ -74,9 +107,13 @@ def main():
             
             # Send to agent
             print("🤖 Agent: ", end="", flush=True)
-            response = chat(user_input)
-            print(response)
-            print()
+            response = chat(user_input, stream=True)
+            # When streaming=True, chunks are already printed during streaming (line 52)
+            # So we don't need to print the response again - it's already displayed
+            # Only print if there's an error
+            if response and response.startswith("Error:"):
+                print(response)
+            print()  # Add newline after response
             
         except KeyboardInterrupt:
             print("\n\n👋 Goodbye!")

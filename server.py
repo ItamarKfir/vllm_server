@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from llm_interface import LLMInterface
 from routes import router
+from config_manager import setting
 import uvicorn
 
 @asynccontextmanager
@@ -16,4 +17,11 @@ app = FastAPI(title="LLM Streaming API", lifespan=lifespan)
 app.include_router(router)
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Use server configuration from config manager
+    uvicorn.run(
+        app,
+        host=setting.server.host,
+        port=setting.server.port,
+        reload=setting.server.reload,
+        log_level=setting.server.log_level
+    )
