@@ -36,16 +36,28 @@ async def generate_stream(req: PromptRequest):
 def health_check():
     return {"status": "ok"} 
 
-@router.get("/get_config")
-def get_config():
+@router.get("/get_llm_config")
+def get_llm_config():
     from config_manager import setting
     return setting.llm.dict()
 
-@router.post("/save_config")
-def save_config(config: dict):
+@router.get("/get_server_config")
+def get_server_config():
+    from config_manager import setting
+    return setting.server.dict()
+
+@router.post("/save_llm_config")
+def save_llm_config(config: dict):
     from config_manager import setting, LLMConfig
     llm_config = LLMConfig(**config)
     setting._save_llm(llm_config)
     LLMInterface.reset()
     LLMInterface()
+    return {"status": "config saved"}
+
+@router.post("/save_server_config")
+def save_server_config(config: dict):
+    from config_manager import setting, ServerConfig
+    server_config = ServerConfig(**config)
+    setting._save_server(server_config)
     return {"status": "config saved"}

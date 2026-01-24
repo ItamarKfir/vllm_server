@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import os
 import json
 
-from agent import create_agent, chat_with_agent, chat_with_agent_stream
+from agent import create_agent, chat_with_agent_stream
 
 # Global agent instance
 agent_instance = None
@@ -116,15 +116,7 @@ async def chat(request: ChatRequest, stream: bool = False):
             }
         )
     else:
-        # Non-streaming response
-        try:
-            response = await chat_with_agent(agent_instance, request.message)
-            return ChatResponse(
-                response=response,
-                conversation_id=request.conversation_id,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)}")
+        raise HTTPException(status_code=400, detail="Streaming is required. Use ?stream=true")
 
 
 @app.get("/")

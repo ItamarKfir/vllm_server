@@ -2,7 +2,7 @@
     "llm": {
         "gpu_util": 0.9,
         "gpu_kv_cache_gb": 3.0,
-        "max_model_len": 12000,
+        "max_model_len": 11000,
         "max_num_seqs": 8,
         "max_num_batched_tokens": 2048,
         "max_output_tokens": 2000,

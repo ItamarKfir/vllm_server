@@ -66,5 +66,5 @@ class Setting:
         
         self.server = server_config
 
-setting = Setting(config_path="llm_config.json")
+setting = Setting(config_path="configuration.json")
     

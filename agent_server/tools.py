@@ -7,6 +7,8 @@ import os
 import glob
 import sys
 from datetime import datetime
+from llama_index.core.tools import FunctionTool
+
 
 
 class CalculatorTool:
@@ -466,14 +468,52 @@ class FileSearchTool:
             return error_msg
 
 
-def get_all_tools():
-    """Get all available tools"""
-    # Set the search path to the project root
-    search_path = "/home/itamar/Desktop/vllm_server"
+def get_function_tools(tool_usage_tracker):
+    import json
+    import sys
     
-    return [
+    tool_instances = [
         CalculatorTool(),
         WebSearchTool(),
-        FileOperationsTool(base_path="/tmp"),  # Safe base path
-        FileSearchTool(base_path=search_path),  # Search in project root
+        FileOperationsTool(base_path="/tmp"),
+        FileSearchTool(base_path="/home/itamar/Desktop/vllm_server"),
     ]
+    
+    function_tools = []
+    for tool in tool_instances:
+        def create_tool_function(tool_instance):
+            def tool_function(*args, **kwargs) -> str:
+                tool_name = tool_instance.name
+                if tool_name not in tool_usage_tracker["tools_used"]:
+                    tool_usage_tracker["tools_used"].append(tool_name)
+                
+                input_data = None
+                if kwargs:
+                    if 'args' in kwargs:
+                        args_value = kwargs['args']
+                        if hasattr(args_value, 'keys'):
+                            cmd_dict = dict(args_value)
+                        else:
+                            cmd_dict = dict(args_value) if isinstance(args_value, dict) else vars(args_value)
+                        input_data = json.dumps(cmd_dict)
+                    else:
+                        input_data = json.dumps(kwargs)
+                elif args:
+                    input_data = args[0] if isinstance(args[0], str) else str(args[0])
+                else:
+                    input_data = ""
+                
+                try:
+                    result = tool_instance.execute(input_data)
+                    return result
+                except Exception as e:
+                    import traceback
+                    return f"Error in tool '{tool_name}': {str(e)}\n{traceback.format_exc()}"
+            return tool_function
+        
+        tool_func = create_tool_function(tool)
+        tool_func.__name__ = tool.name
+        function_tool = FunctionTool.from_defaults(fn=tool_func, name=tool.name, description=tool.description)
+        function_tools.append(function_tool)
+    
+    return function_tools
