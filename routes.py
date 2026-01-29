@@ -1,36 +1,75 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+
 from llm_interface import LLMInterface
-from typing import Generator
+from metrics import start_request, record_result, finish_request
+from logger import log_with_timestamp
 
 router = APIRouter()
+
 
 class PromptRequest(BaseModel):
     prompt: str
 
-@router.post("/generate/nonstream")
-def generate_nonstream(req: PromptRequest):
-    engine = LLMInterface()
-    
-    def token_stream() -> Generator[str, None, None]:
-        for char in engine.stream(req.prompt):
-            yield char
 
-    return StreamingResponse(token_stream(), media_type="text/plain")
+class GenerateResponse(BaseModel):
+    text: str
+
+
+@router.post("/generate/nonstream", response_model=GenerateResponse)
+async def generate_nonstream(req: PromptRequest):
+    endpoint = "nonstream"
+    request_size = len(req.prompt.encode("utf-8"))
+    start_time = start_request(endpoint, request_size)
+    log_with_timestamp(f"Request received: {endpoint} | prompt_len={len(req.prompt)}")
+
+    try:
+        engine = LLMInterface()
+        text = await engine.generate(req.prompt)
+        token_approx = max(1, len(text.split()))
+        log_with_timestamp(f"Generation completed: {endpoint} | tokens={token_approx} | response_len={len(text)}")
+        record_result(endpoint, "success", token_count=token_approx)
+        return GenerateResponse(text=text)
+    except Exception as e:
+        log_with_timestamp(f"Request error: {endpoint} | error={str(e)}", level="ERROR")
+        record_result(endpoint, "error")
+        raise
+    finally:
+        finish_request(endpoint, start_time)
 
 
 @router.post("/generate/stream")
 async def generate_stream(req: PromptRequest):
-    engine = LLMInterface()
-    async def event_generator():
-        async for token in engine.stream(req.prompt):
-            yield token
+    endpoint = "stream"
+    request_size = len(req.prompt.encode("utf-8"))
+    start_time = start_request(endpoint, request_size)
+    log_with_timestamp(f"Request received: {endpoint} | prompt_len={len(req.prompt)}")
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/plain",
-    )
+    try:
+        engine = LLMInterface()
+        token_count = 0
+
+        async def event_generator():
+            nonlocal token_count
+            try:
+                async for token in engine.stream(req.prompt):
+                    token_count += 1
+                    yield token
+                log_with_timestamp(f"Stream completed: {endpoint} | tokens={token_count}")
+                record_result(endpoint, "success", token_count=token_count)
+            except Exception as e:
+                log_with_timestamp(f"Stream error: {endpoint} | error={str(e)}", level="ERROR")
+                record_result(endpoint, "error")
+                raise
+
+        return StreamingResponse(event_generator(), media_type="text/plain")
+    except Exception as e:
+        log_with_timestamp(f"Request error: {endpoint} | error={str(e)}", level="ERROR")
+        record_result(endpoint, "error")
+        raise
+    finally:
+        finish_request(endpoint, start_time)
 
 @router.get("/health")
 def health_check():

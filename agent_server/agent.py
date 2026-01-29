@@ -38,14 +38,20 @@ class CustomOpenAILLM(LLM):
     
     def _messages_to_prompt(self, messages: Sequence[ChatMessage]) -> str:
         prompt_parts = []
+        has_system = False
         for msg in messages:
             role = msg.role.value
             if role == "system":
+                has_system = True
                 prompt_parts.append(f"<|im_start|>system\n{msg.content}<|im_end|>")
             elif role == "user":
                 prompt_parts.append(f"<|im_start|>user\n{msg.content}<|im_end|>")
             elif role == "assistant":
                 prompt_parts.append(f"<|im_start|>assistant\n{msg.content}<|im_end|>")
+        
+        if not has_system:
+            prompt_parts.insert(0, "<|im_start|>system\nYou MUST respond ONLY in English. Never use Chinese or any other language. All responses must be in English only.<|im_end|>")
+        
         prompt_parts.append("<|im_start|>assistant\n")
         return "\n".join(prompt_parts)
     
@@ -92,7 +98,17 @@ def create_agent(base_url: str = "http://localhost:8000", model: str = "Qwen2.5-
     _tool_usage_tracker["tools_used"] = []
     llm = create_llm(base_url=base_url, model=model)
     function_tools = get_function_tools(_tool_usage_tracker)
-    agent = ReActAgent(tools=function_tools, llm=llm, verbose=False, streaming=True, system_prompt="You are a helpful AI assistant with access to tools. Always respond in English. Use the tools when needed to help answer questions accurately. When you provide your final answer, make it clear and concise in English.")
+    agent = ReActAgent(
+        tools=function_tools, 
+        llm=llm, 
+        verbose=False, 
+        streaming=True, 
+        system_prompt="""IMPORTANT: You MUST respond ONLY in English. Never use Chinese, Japanese, or any other language. All your responses, including thoughts, actions, and final answers, must be in English only.
+
+You are a helpful AI assistant with access to tools. Use the tools when needed to help answer questions accurately. When you provide your final answer, make it clear and concise. 
+
+CRITICAL: Respond in English only. Do not use any other language."""
+    )
     return agent
 
 

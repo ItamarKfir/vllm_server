@@ -4,6 +4,7 @@ from typing import AsyncGenerator
 
 from vllm import AsyncLLMEngine, AsyncEngineArgs, SamplingParams
 from config_manager import setting
+from logger import log_with_timestamp
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["PYTHONHASHSEED"] = "0"
@@ -31,7 +32,7 @@ class LLMInterface:
             cls._instance = None
     
     def init_engine(self):
-        print("🚀 Initializing Async vLLM engine...")
+        log_with_timestamp("🚀 Initializing Async vLLM engine...")
 
         engine_args = AsyncEngineArgs(
             model=setting.llm.llm_models[0],
@@ -51,7 +52,7 @@ class LLMInterface:
             max_tokens=setting.llm.max_output_tokens,
         )
 
-        print("✅ Async vLLM engine ready!")
+        log_with_timestamp("✅ Async vLLM engine ready!")
         self._initialized = True
 
 
@@ -70,3 +71,15 @@ class LLMInterface:
 
             if delta:
                 yield delta
+
+    async def generate(self, prompt: str) -> str:
+        """Run full generation without streaming; returns complete text."""
+        request_id = str(uuid.uuid4())
+        full_text = ""
+        async for output in self.engine.generate(
+            prompt,
+            self.sampling_params,
+            request_id,
+        ):
+            full_text = output.outputs[0].text
+        return full_text
